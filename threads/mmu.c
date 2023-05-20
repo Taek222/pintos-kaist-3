@@ -63,28 +63,42 @@ pdpe_walk(uint64_t *pdpe, const uint64_t va, int create) {
  * on CREATE.  If CREATE is true, then a new page table is
  * created and a pointer into it is returned.  Otherwise, a null
  * pointer is returned. */
+/* 가상 페이지 테이블 항목의 주소를 반환합니다.
+ * 페이지 맵 레벨 4, pml4의 주소 VADDR을 반환합니다.
+ * PML4E에 VADDR에 대한 페이지 테이블이 없는 경우, 동작은 CREATE에 따라
+ * 에 따라 달라집니다.  CREATE가 참이면 새 페이지 테이블이
+ * 생성되고 이에 대한 포인터가 반환됩니다.  그렇지 않으면 null
+ * 포인터가 반환됩니다. */
+
+/*
+    pml4e_walk() 함수는 x86-64 페이징 계층 구조의 페이지 테이블을 탐색하고 주어진 가상 주소에 해당하는 페이지 테이블 항목(PTE)을 검색하는 데 사용됩니다.
+    PML4E(Page Map Level 4 Entry)를 가상 주소(va) 및 새 페이지 테이블 항목이 존재하지 않는 경우 생성할지 여부를 나타내는 플래그 create와 함께 입력으로 사용합니다.
+*/
 uint64_t *
 pml4e_walk(uint64_t *pml4e, const uint64_t va, int create) {
-    uint64_t *pte = NULL;
-    int idx = PML4(va);
-    int allocated = 0;
+    uint64_t *pte = NULL; // 포인터 pte를 NULL로 초기화하여 결과 페이지 테이블 항목을 저장합니다.
+    int idx = PML4(va);   // 주어진 가상 주소(va)에 해당하는 PML4E 항목의 인덱스를 계산합니다.
+    int allocated = 0;    // 새 페이지 테이블이 할당되었는지 추적하기 위해 '할당됨' 플래그를 초기화합니다.
     if (pml4e) {
-        uint64_t *pdpe = (uint64_t *)pml4e[idx];
+        uint64_t *pdpe = (uint64_t *)pml4e[idx]; // PML4E 항목을 uint64_t*로 변환하여 계산된 인덱스에 해당하는 PDPTE(Page Directory Pointer Table Entry)에 액세스합니다.
         if (!((uint64_t)pdpe & PTE_P)) {
-            if (create) {
-                uint64_t *new_page = palloc_get_page(PAL_ZERO);
+            if (create)
+            { // create 플래그가 설정되어 있는지 확인하십시오. 이는 존재하지 않는 경우 새 페이지 테이블 항목을 생성해야 함을 나타냅니다.
+                uint64_t *new_page = palloc_get_page(PAL_ZERO); // palloc_get_page()를 사용하여 페이지 테이블에 대한 새로운 물리적 페이지를 할당합니다. PAL_ZERO 플래그는 페이지가 0이 되도록 합니다.
                 if (new_page) {
-                    pml4e[idx] = vtop(new_page) | PTE_U | PTE_W | PTE_P;
-                    allocated = 1;
-                } else
+                    pml4e[idx] = vtop(new_page) | PTE_U | PTE_W | PTE_P; // 새로 할당된 페이지 테이블의 물리적 주소로 PML4E 항목을 필수 플래그(사용자 액세스의 경우 PTE_U, 쓰기 권한의 경우 PTE_W, 존재 여부의 경우 PTE_P)와 함께 설정합니다.
+                    allocated = 1;                                       // 새 페이지 테이블이 할당되었음을 나타내기 위해 allocated 플래그를 설정합니다.
+                }
+                else // 새 페이지를 할당할 수 없으면 NULL을 반환합니다.
                     return NULL;
-            } else
+            }
+            else // PDPTE가 없고 create 플래그가 설정되지 않은 경우 NULL을 반환하여 유효한 페이지 테이블 항목이 없음을 나타냅니다.
                 return NULL;
         }
-        pte = pdpe_walk(ptov(PTE_ADDR(pml4e[idx])), va, create);
+        pte = pdpe_walk(ptov(PTE_ADDR(pml4e[idx])), va, create); // 반복적으로 pdpe_walk()를 호출하여 PDPTE 내에서 주어진 가상 주소에 대한 페이지 테이블 항목을 검색합니다. 가상 주소 및 'create' 플래그와 함께 PML4E 항목을 마스킹하여 얻은 페이지 테이블의 물리적 주소를 전달합니다.
     }
-    if (pte == NULL && allocated) {
-        palloc_free_page((void *)ptov(PTE_ADDR(pml4e[idx])));
+    if (pte == NULL && allocated) { // 결과 페이지 테이블 항목이 NULL이고 새 페이지 테이블이 할당되었는지 확인하십시오.
+        palloc_free_page((void *)ptov(PTE_ADDR(pml4e[idx]))); // ptov()를 사용하여 물리적 주소를 가상 주소로 변환하여 할당된 페이지 테이블을 해제하고
         pml4e[idx] = 0;
     }
     return pte;
@@ -270,16 +284,28 @@ bool pml4_is_dirty(uint64_t *pml4, const void *vpage) {
 
 /* Set the dirty bit to DIRTY in the PTE for virtual page VPAGE
  * in PML4. */
+/*
+    pml4_set_dirty() 함수는 PML4(페이지 맵 레벨 4) 테이블에서 페이지 테이블 항목의 더티 플래그(PTE_D)를 설정하거나 지우는 데 사용됩니다
+    PML4 테이블 포인터(pml4), 가상 페이지 주소(vpage) 및 더티 플래그를 설정할지 또는 지울지 여부를 나타내는 부울 플래그(dirty)를 사용합니다.
+*/
 void pml4_set_dirty(uint64_t *pml4, const void *vpage, bool dirty) {
+    /*
+        pml4e_walk() 함수를 호출하여 PML4 테이블에서 가상 페이지 주소(vpage)에 해당하는 페이지 테이블 항목(PTE)을 검색합니다.
+        'false' 플래그는 새 페이지 테이블 항목이 존재하지 않는 경우 생성되지 않아야 함을 나타냅니다. 결과 PTE는 pte 포인터에 저장됩니다.
+    */
     uint64_t *pte = pml4e_walk(pml4, (uint64_t)vpage, false);
     if (pte) {
-        if (dirty)
-            *pte |= PTE_D;
-        else
-            *pte &= ~(uint32_t)PTE_D;
+        if (dirty) // dirty 플래그가 true인지 확인하여 더티 플래그를 설정해야 함을 나타냅니다.
+            *pte |= PTE_D; // pte와 PTE_D가 가리키는 값 사이에 비트 OR 연산을 수행하여 더티 플래그(PTE_D)를 설정합니다. 이렇게 하면 페이지 테이블 항목에 더티 플래그가 설정됩니다.
+        else               // dirty 플래그가 false인 경우 더티 플래그를 지워야 함을 나타냅니다.
+            *pte &= ~(uint32_t)PTE_D; // pte가 가리키는 값과 PTE_D의 보수 사이에 비트 AND 연산을 수행하여 더티 플래그를 지웁니다. 이렇게 하면 페이지 테이블 항목에서 더티 플래그가 지워집니다.
 
+        /*
+            제어 레지스터 CR3(rcr3() 함수를 통해 얻은 값)의 현재 값이 PML4 테이블의 물리적 주소(vtop(pml4))와 같은지 확인하십시오.
+            이 조건은 수정 중인 현재 페이지 테이블이 활성 페이지 테이블인지 확인합니다.
+        */
         if (rcr3() == vtop(pml4))
-            invlpg((uint64_t)vpage);
+            invlpg((uint64_t)vpage); // invlpg() 함수를 호출하여 가상 페이지 주소(vpage)에 대한 변환 색인 버퍼(TLB) 항목을 무효화합니다. 이렇게 하면 TLB가 수정된 페이지 테이블 항목으로 업데이트됩니다. 이 함수는 페이지 테이블 항목의 더티 플래그를 설정하거나 지우고 필요한 경우 TLB를 업데이트합니다.
     }
 }
 

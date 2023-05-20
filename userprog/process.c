@@ -976,27 +976,53 @@ install_page(void *upage, void *kpage, bool writable)
  * If you want to implement the function for only project 2, implement it on the
  * upper block. */
 
+/*
+    lazy_load_segment는 vm_alloc_page_with_initializer의 4번째 argument로 제공된다.
+    이 함수는 executable`s page의 initializer이며 page fault 발생시에 실행된다.
+    이 함수는 page struct와 aux를 arguments로 받는다. aux는 load_segment에서 설정하는 정보다.
+    이 정보를 사용하여 segment를 읽은 file을 찾아 segment를 메모리로 읽어야(read)한다.
+
+    lazy-load에 대한 page fault인 경우 kernel은 이전에 당신이 vm_alloc_page_with_initializer에서
+    설정한 초기 initializers중 하나를 호출하여 segment를 lazy load 한다. lazy_load_segment는 이걸 위한 함수다.
+
+    실행 가능한 파일의 페이지들을 초기화하는 함수이고 page fault가 발생할 때 호출된다.
+    aux는 load_segment에서 우리가 설정하는 정보이다. 이 정보를 사용하여 세그먼트를 읽을 파일을 찾고
+    최종적으로는 세그먼트를 메모리에서 읽어야 한다.
+
+    지연 로딩 중에 파일에서 페이지로 세그먼트를 로드하는 역할
+
+    lazy_load_segment 에서 file_read를 하면 page fault 없이 file_read가 성공해야 하며 그 값이 physical frame에 저장되어야 합니다. 
+    lazy_load_segment 자체가 아직 로드되지 않은 페이지를 유저프로그램이 접근할 때 page fault가 발생하면 physical frame을 할당한 후 실행되는 함수이므로, 
+    이 함수 내에서 page fault가 또 발생하는 것은 조금 이상한 것 같습니다.
+*/
 static bool
-lazy_load_segment(struct page *page, void *aux)
+lazy_load_segment(struct page *page, void *aux) // page(로드할 페이지를 나타내는 struct page에 대한 포인터) 및 aux(보조 정보에 대한 포인터, 로드할 세그먼트 및 파일에 대한 세부 정보).
 {
     /* TODO: Load the segment from the file */
     /* TODO: This called when the first page fault occurs on address VA. */
     /* TODO: VA is available when calling this function. */
+    // true로 초기화된 부울 변수 success와 aux 값으로 초기화된 struct aux_segment_load 유형의 포인터 info를 선언합니다. 'aux'에는 세그먼트 로드에 필요한 추가 정보가 포함되어 있을 수 있습니다.
     bool success = true;
     struct load_segment_aux *info = (struct load_segment_aux *)aux;
-    if (file_read_at(info->file, page->va, info->page_read_bytes, info->ofs) != (off_t)info->page_read_bytes)
+
+    // info->file에 의해 지정된 파일의 내용을 page->come(page->data로 의도된 오타일 수 있음) 버퍼로 읽으려고 시도합니다.  
+    if (file_read_at(info->file, page->va, info->page_read_bytes, info->ofs) != (off_t)info->page_read_bytes) // file_read_at(읽은 바이트 수)의 반환 값을 info->page_read_bytes와 비교하여 올바른 바이트 수를 읽었는지 확인합니다.
+    // 읽기 작업이 실패하거나 예상 바이트 수를 읽지 못하면 페이지 할당이 취소되고(vm_dealloc_page) success가 false로 설정됩니다.
     {
         vm_dealloc_page(page);
         success = false;
     }
+    /*
+        else 블록에서 읽기 작업이 성공하면 memset을 사용하여 페이지의 나머지 바이트(page->va + info->page_read_bytes에서 시작)를 0으로 초기화합니다. 
+        이는 파일에서 읽은 바이트 외에 페이지의 나머지 바이트를 0으로 만들어야 함을 나타냅니다.
+    */
     else
     {
-        memset((page->va) + info->page_read_bytes, 0, info->page_zero_bytes);
+        memset((page->va) + info->page_read_bytes, 0, info->page_zero_bytes); // 가상메모리 주소에 페이지 리드 바이트 
     }
-
-    file_close(info->file);
-    free(aux);
-    return success;
+    file_close(info->file); // info->file에 지정된 파일을 닫고
+    free(aux);              // aux에 할당된 메모리를 해제하며
+    return success;         // 세그먼트의 지연 로드가 성공했는지 여부를 나타내는 success 변수를 반환합니다.
 }
 
 /* Loads a segment starting at offset OFS in FILE at address
@@ -1014,32 +1040,62 @@ lazy_load_segment(struct page *page, void *aux)
  * Return true if successful, false if a memory allocation error
  * or disk read error occurs. */
 
+/*
+    load_segment loop 내부를 수정해야 한다.
+    루프를 돌 때마다 load_segment는 대기 중인 페이지 오브젝트를 생성하는
+    vm_alloc_page_with_initializer를 호출한다.
+    page Fault가 발생하는 순간은 segment가 실제로 파일에서 로드될 때이다.
+    vm_alloc_page_with_initializer에 제공할 aux 인자로써 보조 값들을 설정할 필요가 있다.
+    바이너리 파일을 로드할 때 필수적인 정보를 포함하는 구조체를 생성하는 것이 좋다.
+
+    이 함수는 파일의 세그먼트를 메모리로 로드하는 역할을 합니다. 
+    여러 매개변수를 취합니다: file, 로드할 파일에 대한 포인터; 
+    ofs, 읽기를 시작할 파일의 오프셋; 쓰기를 시작할 가상 메모리 페이지에 대한 포인터인 'upage'; read_bytes,
+    파일에서 읽을 바이트 수 'zero_bytes', 0으로 만들 바이트 수; 및 'writable', 페이지가 쓰기 가능해야 하는지 여부를 나타내는 부울입니다.
+
+    파일에서 메모리로 프로그램을 로드하는 함수인 load_segment입니다.
+*/
 static bool
 load_segment(struct file *file, off_t ofs, uint8_t *upage,
              uint32_t read_bytes, uint32_t zero_bytes, bool writable)
 {
-    ASSERT((read_bytes + zero_bytes) % PGSIZE == 0);
-    ASSERT(pg_ofs(upage) == 0);
-    ASSERT(ofs % PGSIZE == 0);
+    ASSERT((read_bytes + zero_bytes) % PGSIZE == 0); // read_bytes와 zero_bytes의 합이 페이지 크기의 배수인지
+    ASSERT(pg_ofs(upage) == 0);                      // upage 포인터가 페이지 시작 부분에 정렬되었는지
+    ASSERT(ofs % PGSIZE == 0);                       //  ofs 오프셋도 페이지 시작 부분에 정렬되었는지 확인합니다.
 
-    off_t dynamic_ofs = ofs;
-    while (read_bytes > 0 || zero_bytes > 0)
+    off_t dynamic_ofs = ofs;                 // 이 변수 dynamic_ofs는 ofs 오프셋으로 초기화됩니다. 세그먼트를 로드하는 동안 파일의 현재 오프셋을 추적하는 데 사용됩니다.
+    while (read_bytes > 0 || zero_bytes > 0) // 이 while 루프는 세그먼트의 모든 바이트가 처리될 때까지 계속됩니다. 아직 읽을 바이트가 있거나 0이 되는 한 반복됩니다.
     {
         /* Do calculate how to fill this page.
          * We will read PAGE_READ_BYTES bytes from FILE
          * and zero the final PAGE_ZERO_BYTES bytes. */
-        size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
+
+        // 이 코드는 현재 페이지에 적재해야 할 데이터의 크기를 결정합니다.
+        // 이 줄은 채워야 하는 현재 페이지의 크기를 계산합니다. 파일에서 읽어야 하는 바이트 수(page_read_bytes)와 비워야 하는 바이트 수(page_zero_bytes)를 결정합니다.
+        size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE; 
         size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
         /* TODO: Set up aux to pass information to the lazy_load_segment. */
+
+        /*
+            이 부분은 lazy_load_segment 함수에게 필요한 인자들을 struct load_segment_aux 구조체로 묶어 전달합니다.
+            file_reopen 함수를 사용하여 파일을 다시 열고, filesys_lock을 사용하여 파일을 안전하게 엽니다.
+
+            이 섹션에서는 struct load_segment_aux가 생성되고 lazy_load_segment 함수에 전달되는 데 필요한 정보로 채워집니다.
+            'file_reopen'을 사용하여 배타적 액세스를 보장하기 위해 파일이 다시 열리고 경쟁 조건을 방지하기 위해 잠금('filesys_lock')이 획득 및 해제됩니다.
+        */
         struct load_segment_aux *aux = (struct load_segment_aux *)malloc(sizeof(struct load_segment_aux));
         lock_acquire(&filesys_lock);
         aux->file = file_reopen(file);
         lock_release(&filesys_lock);
         aux->ofs = dynamic_ofs;
-        aux->page_read_bytes = page_read_bytes;
+        aux->page_read_bytes = page_read_bytes; 
         aux->page_zero_bytes = page_zero_bytes;
 
+        /*
+            이 코드는 vm_alloc_page_with_initializer 함수를 호출하여 새로운 가상 메모리 페이지를 할당하고 lazy_load_segment 함수를 초기화로 초기화합니다.
+            load_segment_aux 구조체는 이니셜라이저에 보조 데이터로 전달됩니다. 할당에 실패하면 파일이 닫히고 메모리가 해제되며 함수는 'false'를 반환하여 오류를 나타냅니다.
+        */
         if (!vm_alloc_page_with_initializer(VM_ANON, upage,
                                             writable, lazy_load_segment, (void *)aux))
         {
@@ -1058,20 +1114,39 @@ load_segment(struct file *file, off_t ofs, uint8_t *upage,
 }
 
 /* Create a PAGE of stack at the USER_STACK. Return true on success. */
+/*
+    stack은 disk에서 file을 읽어올 필요가 없으니까 lazy load 할 필요가 없다. (그래서 init에 NULL을 넣어준다?)
+    anon page로 만들 uninit page를 stack_bottom에서 위로 1page만큼 만든다. 이 때 type에 VM_MARKER_0 flag를 추가함으로써 이 page가 stack임을 표시
+    stack_bottom을 thread.h에 추가해준다.
+
+    setup_stack 함수는 Pintos에서 사용자 프로세스의 초기 스택을 설정하는 역할을 합니다. 프로세스 생성 중에 호출되며 커널 모드에서 실행됩니다.
+*/
 static bool
-setup_stack(struct intr_frame *if_)
+setup_stack(struct intr_frame *if_) // 이 함수는 인터럽트 프레임(if_)에 대한 포인터를 매개변수로 사용하고 설정이 성공했는지 여부를 나타내는 부울 값을 반환합니다.
 {
-    bool success = false;
-    void *stack_bottom = (void *)(((uint8_t *)USER_STACK) - PGSIZE);
+    bool success = false; // 부울 변수 'success'는 스택 설정의 성공을 추적하기 위해 'false'로 초기화됩니다.
+    void *stack_bottom = (void *)(((uint8_t *)USER_STACK) - PGSIZE); // 변수 stack_bottom은 사용자 스택의 맨 아래 주소로 초기화됩니다. USER_STACK 주소에서 페이지 크기(PGSIZE)를 뺀 값입니다. 이는 스택의 초기 바닥을 정의합니다.
 
     /* TODO: Map the stack on stack_bottom and claim the page immediately.
      * TODO: If success, set the rsp accordingly.
      * TODO: You should mark the page is stack. */
     /* TODO: Your code goes here */
-    success = vm_alloc_page(VM_ANON, stack_bottom, true);
-    if (success)
+    /* 할 일: 스택을 스택_하단에 매핑하고 즉시 페이지를 소유권을 주장하세요.
+     * 할 일: 성공하면 그에 따라 rsp를 설정하세요.
+     * 할 일: 페이지가 스택임을 표시해야 합니다. */
+    /* TODO: 코드가 여기에 있습니다 */
+
+    success = vm_alloc_page(VM_ANON, stack_bottom, true); // 스택에 대한 가상 메모리 페이지를 할당하기 위해 vm_alloc_page 함수가 호출됩니다. VM_ANON 유형을 사용하여 익명 페이지(파일에 의해 지원되지 않음)를 할당하고 stack_bottom을 페이지 주소로 지정합니다. 마지막 매개변수 'true'는 페이지가 쓰기 가능해야 함을 나타냅니다.
+
+    /*
+        스택 페이지 할당에 성공하면 코드는 vm_claim_page를 사용하여 스택에 해당하는 물리적 메모리 페이지를 요청합니다.
+        spt_find_page 기능은 스택 페이지에 대한 추가 페이지 테이블(spt)에서 해당 항목을 찾는 데 사용됩니다.
+        클레임이 성공하면 인터럽트 프레임(if_)의 rsp(스택 포인터)가 USER_STACK 주소로 설정됩니다.
+        마지막으로 이 함수는 스택 설정이 성공했는지 여부를 나타내는 'success' 값을 반환합니다.
+    */
+    if (success) // 
     {
-        struct page *pg = spt_find_page(&thread_current()->spt, stack_bottom);
+        struct page *pg = spt_find_page(&thread_current()->spt, stack_bottom); // ?? 여기 코드는 그럼 위에서 익명 타입 페이지를 스택바텀에 할당한 것을 보조페이지 테이블에서 찾는 건가?
 
         if (vm_claim_page(stack_bottom))
             if_->rsp = (uintptr_t)USER_STACK;

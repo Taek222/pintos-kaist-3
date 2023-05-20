@@ -7,6 +7,7 @@ struct page;
 enum vm_type;
 
 struct anon_page {
+    /* project3 */
     disk_sector_t sec_no;
     struct thread *thread;
 };

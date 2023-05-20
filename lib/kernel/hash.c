@@ -181,14 +181,17 @@ hash_apply (struct hash *h, hash_action_func *action) {
    functions hash_clear(), hash_destroy(), hash_insert(),
    hash_replace(), or hash_delete(), invalidates all
    iterators. */
+/*
+	hash_first 함수는 해시 테이블(struct hash)의 요소를 반복하기 위해 해시 반복자(struct hash_iterator)를 초기화하는 데 사용됩니다.
+*/
 void
 hash_first (struct hash_iterator *i, struct hash *h) {
 	ASSERT (i != NULL);
 	ASSERT (h != NULL);
 
-	i->hash = h;
-	i->bucket = i->hash->buckets;
-	i->elem = list_elem_to_hash_elem (list_head (i->bucket));
+	i->hash = h; // 반복자 구조 'i'의 'hash' 멤버는 주어진 해시 테이블 'h'를 가리키도록 설정되어 반복자가 해당 해시 테이블과 연결되어 있음을 나타냅니다.
+	i->bucket = i->hash->buckets; // iterator의 'bucket' 멤버는 해시 테이블의 첫 번째 버킷을 가리키도록 설정됩니다. 이렇게 하면 반복자가 해시 테이블의 시작 부분부터 반복을 시작할 준비가 됩니다.
+	i->elem = list_elem_to_hash_elem(list_head(i->bucket)); // 반복자의 elem 멤버는 현재 버킷의 첫 번째 연결 목록 요소(list_elem)에 저장된 해시 요소로 설정됩니다. list_head 함수는 버킷의 첫 번째 목록 요소에 대한 포인터를 반환하고 list_elem_to_hash_elem은 목록 요소 포인터를 해당 해시 요소 포인터로 변환합니다.
 }
 
 /* Advances I to the next element in the hash table and returns

@@ -449,29 +449,48 @@ int sys_dup2(int oldfd, int newfd)
     return newfd;
 }
 
+/*
+    mmap :
+    파일 디스크립터 fd로 오픈한 파일을 offset byte 위치에서부터 시작해 length 바이트 크기만큼 읽어들여 addr에 위치한 프로세스 가상 주소 공간에 매핑한다.
+    전체 파일은 페이지 단위로 나뉘어 연속적인 가상 주소 페이지에 매핑된다. 즉, mmap()은 메모리를 페이지 단위로 할당받는 시스템 콜이다.
+
+    sys_mmap() 함수는 제공된 매개변수에 대한 다양한 검사를 수행하고 주소 범위, 파일 존재, 오프셋 및 길이를 확인하여 mmap() 시스템 호출을 처리합니다.
+    모든 검사가 통과되면 do_mmap() 함수를 호출하여 실제 메모리 매핑을 수행하고 성공하면 매핑된 주소를 반환합니다.
+
+    파일에 가상 페이지 매핑을 해줘도 적합한지를 체크해주는 함수
+*/
 static void *sys_mmap(void *addr, size_t length, int writable, int fd, off_t offset)
 {
     if (addr == NULL)
         return NULL;
 
+    // 그것은 오프셋이 페이지 크기 PGSIZE에 정렬되어 있는지 확인하고 그렇지 않은 경우 NULL을 반환하여 적절한 정렬을 보장합니다.
     if (offset % PGSIZE != 0)
         return NULL;
 
+    // addr이 커널 주소 범위 내에 있는지 확인하고 true인 경우 NULL을 반환하여 커널 공간으로의 매핑을 방지합니다.
     if (is_kernel_vaddr(addr))
         return NULL;
 
+    // addr + length가 커널 주소 범위 내에 있는지 확인하고 true인 경우 NULL을 반환하여 커널 공간으로의 매핑을 방지합니다.
     if (is_kernel_vaddr((size_t)addr + length))
         return NULL;
 
     if ((long)length <= 0)
         return NULL;
 
+    // pg_round_down()을 사용하여 addr이 이미 페이지 정렬되었는지 확인하고 그렇지 않은 경우 NULL을 반환합니다.
     if (addr != pg_round_down(addr))
         return NULL;
 
     void *start_addr = pg_round_down(addr);
     void *end_addr = pg_round_down(addr + length);
     ASSERT(start_addr <= end_addr);
+
+    /*
+        end_addr에서 start_addr까지 반복하여 validate_usr_addr()을 ​​사용하여 기존 struct page에 대한 각 페이지 정렬 주소를 확인합니다.
+        struct page가 발견되면 해당 영역이 이미 매핑된 것이므로 NULL을 반환합니다.
+    */
     for (void *addr = end_addr; addr >= start_addr; addr -= PGSIZE)
     {
         struct page *pg = validate_usr_addr(addr);
@@ -481,31 +500,36 @@ static void *sys_mmap(void *addr, size_t length, int writable, int fd, off_t off
         }
     }
 
-    void *file = process_get_file(fd);
+    void *file = process_get_file(fd); // process_get_file()을 사용하여 주어진 파일 설명자 fd에 해당하는 파일을 검색합니다. 파일이 없으면 NULL을 반환합니다.
     if (file == NULL)
         return NULL;
 
-    file += 0x8000000000;
+    file += 0x8000000000; // 변수 'file'은 오프셋('0x8000000000')을 추가하도록 조정되어 파일 포인터와 커널 가상 주소를 구분합니다.
 
-    if ((file == &stdin_file) || (file == &stdout_file))
+    if ((file == &stdin_file) || (file == &stdout_file)) // 파일이 표준 입력 또는 출력 파일인지 확인하고 매핑을 방지하기 위해 true인 경우 NULL을 반환합니다.
         return NULL;
 
-    off_t file_len = file_length(file);
+    off_t file_len = file_length(file); // file_length()를 사용하여 파일의 길이를 검색합니다. 파일 길이가 0이면 NULL을 반환합니다.
     if (file_len == 0)
         return NULL;
 
-    if (file_len <= offset)
+    if (file_len <= offset) // 파일 길이가 주어진 오프셋보다 작거나 같은지 확인하고 참이면 NULL을 반환하여 잘못된 오프셋을 나타냅니다.
         return NULL;
 
-    struct thread *curr_thraed = thread_current();
-    file_len = file_len < length ? file_len : length;
-    lock_acquire(&filesys_lock);
-    void *success = do_mmap(addr, (size_t)file_len, writable, file, offset);
-    lock_release(&filesys_lock);
+    struct thread *curr_thraed = thread_current(); // thread_current()를 사용하여 현재 스레드를 검색하고 curr_thread 변수에 할당합니다.
+    file_len = file_len < length ? file_len : length; // file_len과 length 중에서 더 작은 값을 선택하여 매핑의 실제 길이를 결정합니다.
+    lock_acquire(&filesys_lock);                      // 파일 시스템에 대한 독점 액세스를 보장하기 위해 filesys_lock을 획득하고
+    void *success = do_mmap(addr, (size_t)file_len, writable, file, offset); // do_mmap() 함수를 호출하여 실제 매핑을 수행합니다. 결과 주소는 success 변수에 저장됩니다.
+    lock_release(&filesys_lock); // filesys_lock을 해제합니다.
 
-    return success;
+    return success; // 성공하면 매핑된 주소를 포함하고 그렇지 않으면 'NULL'을 포함하는 'success' 변수를 반환합니다.
 }
 
+/*
+    munmap() 함수는 우리가 지우고 싶은 주소 addr 로부터 연속적인 유저 가상 페이지의 변경 사항을 디스크 파일에 업데이트한 뒤, 매핑 정보를 지운다.
+    여기서 중요한 점은 페이지를 지우는 게 아니라 present bit을 0으로 만들어준다는 점이다.
+    따라서 munmap() 함수는 정확히는 지정된 주소 범위 addr에 대한 매핑을 해제하는 함수라고 봐야겠다
+*/
 static void sys_munmap(void *addr)
 {
     if (addr == NULL)

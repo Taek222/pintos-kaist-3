@@ -182,14 +182,20 @@ disk_print_stats (void) {
 1:0 - scratch
 1:1 - swap
 */
+
+/*
+	disk_get() 함수는 주어진 채널 번호(chan_no) 및 장치 번호(dev_no)와 관련된 디스크 구조에 대한 포인터를 검색하는 도우미 함수입니다.
+	일반적으로 시스템의 특정 디스크 장치에 액세스하고 상호 작용하는 데 사용됩니다.
+*/
 struct disk *
 disk_get (int chan_no, int dev_no) {
 	ASSERT (dev_no == 0 || dev_no == 1);
 
-	if (chan_no < (int) CHANNEL_CNT) {
-		struct disk *d = &channels[chan_no].devices[dev_no];
-		if (d->is_ata)
-			return d;
+	if (chan_no < (int) CHANNEL_CNT)
+	{ // 함수는 chan_no 매개변수가 전체 채널 수(CHANNEL_CNT)보다 작은지 확인합니다. 그렇다면 주어진 채널 및 장치 번호와 관련된 디스크 구조 검색을 진행합니다.
+		struct disk *d = &channels[chan_no].devices[dev_no]; // d라는 디스크 구조에 대한 포인터를 선언하고 chan_no 및 dev_no로 표시된 특정 디스크 장치의 주소를 할당합니다. channels 배열에는 다양한 채널이 포함되어 있으며 각 채널에는 장치 배열이 있습니다.
+		if (d->is_ata)																			 // d->is_ata가 true인지 확인하여 디스크 장치가 ATA(Advanced Technology Attachment) 장치임을 나타냅니다. 그렇다면 디스크 구조 d가 유효한 디스크 장치를 나타냄을 의미합니다.
+			return d;																					 // 포인터 'd'를 반환하여 지정된 채널 및 장치 번호와 관련된 디스크 구조에 대한 액세스를 제공합니다.
 	}
 	return NULL;
 }
@@ -207,6 +213,13 @@ disk_size (struct disk *d) {
    room for DISK_SECTOR_SIZE bytes.
    Internally synchronizes accesses to disks, so external
    per-disk locking is unneeded. */
+/* 섹터 SEC_NO를 디스크 D에서 버퍼로 읽습니다.
+	 공간이 있어야 합니다.
+	 내부적으로 디스크에 대한 액세스를 동기화하므로 외부의
+	 디스크별 잠금이 필요하지 않습니다. */
+/*
+	disk_read() 함수는 디스크에서 버퍼로 데이터를 읽는 역할을 합니다.
+*/
 void
 disk_read (struct disk *d, disk_sector_t sec_no, void *buffer) {
 	struct channel *c;
@@ -215,15 +228,15 @@ disk_read (struct disk *d, disk_sector_t sec_no, void *buffer) {
 	ASSERT (buffer != NULL);
 
 	c = d->channel;
-	lock_acquire (&c->lock);
-	select_sector (d, sec_no);
-	issue_pio_command (c, CMD_READ_SECTOR_RETRY);
-	sema_down (&c->completion_wait);
-	if (!wait_while_busy (d))
-		PANIC ("%s: disk read failed, sector=%"PRDSNu, d->name, sec_no);
-	input_sector (c, buffer);
-	d->read_cnt++;
-	lock_release (&c->lock);
+	lock_acquire(&c->lock); // lock_acquire(&c->lock)을 호출하여 디스크 채널과 관련된 잠금을 획득합니다. 이렇게 하면 읽기 작업 중에 디스크에 대한 독점 액세스가 보장됩니다.
+	select_sector(d, sec_no); // select_sector() 함수가 호출되어 제공된 섹터 번호(sec_no)를 기반으로 디스크(d)에서 읽기에 적합한 섹터를 설정합니다.
+	issue_pio_command(c, CMD_READ_SECTOR_RETRY); // issue_pio_command() 함수가 호출되어 선택된 섹터의 읽기를 시작합니다. 채널(c)과 명령(CMD_READ_SECTOR_RETRY)을 매개변수로 전달합니다.
+	sema_down(&c->completion_wait);							 //  sema_down(&c->completion_wait)를 호출하여 읽기 작업이 완료되기를 기다립니다. 이 세마포 다운 작업은 읽기 작업이 완료될 때까지 현재 스레드를 차단합니다.
+	if (!wait_while_busy(d))										 // 읽기 작업이 완료된 후 함수는 디스크 포인터(d)를 매개변수로 wait_while_busy()를 호출하여 디스크가 여전히 사용 중인지 확인합니다.
+		PANIC("%s: disk read failed, sector=%" PRDSNu, d->name, sec_no); // 디스크가 여전히 사용 중이면(읽기 실패를 나타냄) 함수가 패닉 상태가 되고 PANIC()을 사용하여 오류 메시지를 표시합니다.
+	input_sector(c, buffer);																					 // 디스크가 사용 중이 아니고 읽기 작업이 성공하면 input_sector() 함수가 호출되어 디스크 채널(c)에서 제공된 버퍼(buffer)로 데이터를 복사합니다.
+	d->read_cnt++;																										 // 수행된 읽기 작업의 수를 추적하기 위해 디스크의 읽기 수(d->read_cnt)가 증가합니다.
+	lock_release(&c->lock);																						 // lock_release(&c->lock)를 호출하여 디스크 채널과 관련된 잠금을 해제하여 다른 스레드가 디스크에 액세스할 수 있도록 합니다.
 }
 
 /* Write sector SEC_NO to disk D from BUFFER, which must contain
@@ -231,6 +244,17 @@ disk_read (struct disk *d, disk_sector_t sec_no, void *buffer) {
    acknowledged receiving the data.
    Internally synchronizes accesses to disks, so external
    per-disk locking is unneeded. */
+/* 섹터 SEC_NO를 버퍼에서 디스크 D에 쓰기, 여기에는 다음이 포함되어야 합니다.
+	 DISK_SECTOR_SIZE 바이트가 포함되어야 합니다.  디스크가 데이터 수신을
+	 데이터를 수신했음을 확인한 후 반환합니다.
+	 내부적으로 디스크에 대한 액세스를 동기화하므로 외부의
+	 디스크별 잠금이 필요하지 않습니다. */
+
+/*
+	disk_write() 함수는 버퍼에서 디스크의 지정된 섹터로 데이터를 쓰는 일을 담당합니다.
+
+	요약하면 disk_write()는 디스크를 구성하고 쓰기 명령을 내리고 완료를 기다리고 데이터 섹터를 출력하여 디스크 쓰기 작업을 수행합니다. 오류 사례를 처리하고 작업 중에 디스크 채널에 대한 독점 액세스를 보장합니다.
+*/
 void
 disk_write (struct disk *d, disk_sector_t sec_no, const void *buffer) {
 	struct channel *c;
@@ -238,16 +262,16 @@ disk_write (struct disk *d, disk_sector_t sec_no, const void *buffer) {
 	ASSERT (d != NULL);
 	ASSERT (buffer != NULL);
 
-	c = d->channel;
-	lock_acquire (&c->lock);
-	select_sector (d, sec_no);
-	issue_pio_command (c, CMD_WRITE_SECTOR_RETRY);
-	if (!wait_while_busy (d))
-		PANIC ("%s: disk write failed, sector=%"PRDSNu, d->name, sec_no);
-	output_sector (c, buffer);
-	sema_down (&c->completion_wait);
-	d->write_cnt++;
-	lock_release (&c->lock);
+	c = d->channel; // 디스크(d)와 연결된 채널을 검색하고 이를 로컬 변수 c에 할당합니다.
+	lock_acquire(&c->lock); // 디스크 쓰기 작업을 수행하는 동안 채널에 대한 독점 액세스를 보장하기 위해 채널 잠금('c->lock')을 획득합니다.
+	select_sector(d, sec_no); //  select_sector()를 호출하여 디스크를 구성하고 지정된 섹터(sec_no)에 헤드를 배치합니다.
+	issue_pio_command(c, CMD_WRITE_SECTOR_RETRY); // 채널(c)에 명령(CMD_WRITE_SECTOR_RETRY)을 발행하여 쓰기 작업을 시작합니다.
+	if (!wait_while_busy(d))											// 'wait_while_busy()' 함수가 호출되어 디스크가 유휴 상태가 될 때까지 기다립니다. 디스크가 진행 중인 작업을 완료할 때까지 차단됩니다.
+		PANIC("%s: disk write failed, sector=%" PRDSNu, d->name, sec_no); // 디스크 쓰기 작업이 실패하면(디스크가 응답하지 않거나 오류가 발생했음을 의미) 함수는 'PANIC()'을 호출하여 시스템을 중지하고 오류 메시지를 표시합니다. 오류 메시지에는 쓰기에 실패한 디스크 이름과 섹터 번호가 포함됩니다.
+	output_sector(c, buffer);																						// 디스크 쓰기 작업이 성공하면 함수는 채널(c)에서 output_sector()를 호출하고 데이터가 포함된 버퍼를 전달하여 데이터 섹터를 출력합니다.
+	sema_down(&c->completion_wait);																			// 'sema_down()' 함수가 호출되어 쓰기 작업이 완료될 때까지 기다립니다. 작업이 완료되면 인터럽트 처리기에 의해 깨어날 때까지 현재 스레드를 차단합니다.
+	d->write_cnt++;																											// 쓰기 작업이 완료된 후 함수는 디스크의 쓰기 횟수를 증가시킵니다(d->write_cnt).
+	lock_release(&c->lock);																							// 마지막으로 함수는 채널의 잠금을 해제(c->lock)하여 다른 스레드가 디스크에 액세스할 수 있도록 합니다.
 }
 
 /* Disk detection and identification. */

@@ -226,6 +226,12 @@ bitmap_count (const struct bitmap *b, size_t start, size_t cnt, bool value) {
 
 /* Returns true if any bits in B between START and START + CNT,
    exclusive, are set to VALUE, and false otherwise. */
+/* START와 START + CNT 사이에 B의 비트가 하나라도 있으면 참을 반환합니다,
+	 배타적인 비트가 VALUE로 설정되어 있으면 참을, 그렇지 않으면 거짓을 반환합니다.
+
+	 bitmap_contains() 함수는 비트맵의 지정된 비트 범위에 특정 값이 포함되어 있는지 확인하는 데 사용됩니다.
+*/
+
 bool
 bitmap_contains (const struct bitmap *b, size_t start, size_t cnt, bool value) {
 	size_t i;
@@ -235,9 +241,9 @@ bitmap_contains (const struct bitmap *b, size_t start, size_t cnt, bool value) {
 	ASSERT (start + cnt <= b->bit_cnt);
 
 	for (i = 0; i < cnt; i++)
-		if (bitmap_test (b, start + i) == value)
-			return true;
-	return false;
+		if (bitmap_test(b, start + i) == value) // 루프 내에서 함수는 bitmap_test()를 호출하여 비트맵(b)의 현재 인덱스(start + i)에서 비트 값을 확인합니다. 결과는 등호 연산자(==)를 사용하여 원하는 값(value)과 비교됩니다.
+			return true;													// 테스트된 비트가 원하는 값과 일치하여 범위에 지정된 값이 포함되어 있음을 나타내는 경우 함수는 'true'를 반환하여 비트맵에 값이 있음을 나타냅니다.
+	return false;															// 범위에 지정된 값이 포함되어 있지 않음을 나타내는 일치 항목을 찾지 않고 루프가 완료되면 함수는 'false'를 반환합니다.
 }
 
 /* Returns true if any bits in B between START and START + CNT,
@@ -289,11 +295,14 @@ bitmap_scan (const struct bitmap *b, size_t start, size_t cnt, bool value) {
    If CNT is zero, returns 0.
    Bits are set atomically, but testing bits is not atomic with
    setting them. */
+/*
+	bitmap_scan_and_flip() 함수는 비트맵에서 검색 작업을 수행하고 지정된 위치에서 시작하여 비트 범위를 뒤집습니다.
+*/
 size_t
 bitmap_scan_and_flip (struct bitmap *b, size_t start, size_t cnt, bool value) {
-	size_t idx = bitmap_scan (b, start, cnt, value);
-	if (idx != BITMAP_ERROR)
-		bitmap_set_multiple (b, idx, cnt, !value);
+	size_t idx = bitmap_scan(b, start, cnt, value); // 비트맵 b, 시작 위치 start, 카운트 cnt 및 원하는 값 value로 bitmap_scan()을 호출하여 시작합니다. 이 함수는 비트맵을 스캔하고 주어진 범위 내에서 '값'으로 지정된 조건과 일치하는 첫 번째 비트의 인덱스를 반환합니다. 결과는 idx 변수에 저장됩니다.
+	if (idx != BITMAP_ERROR)												// idx가 BITMAP_ERROR와 같지 않은지 확인합니다. 'BITMAP_ERROR'는 일반적으로 오류 또는 일치하는 비트가 없음을 나타내는 특수 값(-1 또는 다른 고유 값)으로 정의됩니다.
+		bitmap_set_multiple(b, idx, cnt, !value);			// 그런 다음 함수는 bitmap_set_multiple()을 호출하여 비트맵 b의 비트 범위를 뒤집습니다. 인덱스 idx에서 시작하는 cnt 비트를 value의 논리적 NOT(!) 값으로 설정합니다. 즉, 범위 내의 비트 상태를 뒤집습니다.
 	return idx;
 }
 
