@@ -179,7 +179,7 @@ do_mmap(void *addr, size_t length, int writable,
     int i = 0;
 
     size_t read_bytes = length;
-    size_t zero_bytes = PGSIZE - length % PGSIZE;
+    size_t zero_bytes = PGSIZE - length % PGSIZE; // 페이지 크기를 넘는 경우 넘은 크기를 페이지에서 빼주고 남은 부분을 0으로 초기화 시켜줌.
     off_t dynamic_ofs = offset;
     void *upage = addr;
     while (read_bytes > 0 || zero_bytes > 0) // 매핑 페이지를 반복하기 위해 루프가 시작됩니다. 모든 read_bytes 및 zero_bytes가 처리될 때까지 계속됩니다.

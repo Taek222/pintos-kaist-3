@@ -70,33 +70,46 @@ void syscall_init(void)
     lock_init(&filesys_lock);
 }
 
+/*
+    validate_usr_addr() 함수는 Pintos 프로젝트에서 사용자 주소를 확인하고 주소에 해당하는 struct page를 검색하는 데 사용됩니다.
+
+    요약하면 validate_usr_addr() 함수는 사용자 주소가 커널 주소가 아닌지 확인하는 역할을 합니다. 주소가 커널 주소이면 프로그램을 종료합니다.
+    그렇지 않으면 스레드의 추가 페이지 테이블에서 주소를 조회하고 해당 struct page를 반환합니다.
+*/
 struct page *validate_usr_addr(void *addr)
 {
-    if (is_kernel_vaddr(addr))
+    if (is_kernel_vaddr(addr)) // is_kernel_vaddr() 함수를 호출하여 주어진 주소 addr이 커널 가상 주소인지 확인합니다. 커널 가상 주소는 커널 공간에 속하는 주소로 사용자 프로그램에서 접근할 수 없습니다.
     {
-        sys_exit(-1);
-        NOT_REACHED();
+        sys_exit(-1); // sys_exit(-1): 종료 상태가 -1인 sys_exit() 함수를 호출하여 현재 사용자 프로그램을 종료합니다. 이것은 사용자 공간에서 커널 주소에 액세스하는 데 오류가 있음을 나타냅니다.
+        NOT_REACHED(); // NOT_REACHED(): 코드에서 이 지점에 절대 도달해서는 안된다는 것을 나타내는 매크로입니다. 이전 단계에서 프로그램이 종료되었어야 하기 때문입니다.
     }
-    return spt_find_page(&thread_current()->spt, addr);
+    return spt_find_page(&thread_current()->spt, addr); // spt_find_page() 함수를 호출하여 해당하는 struct page를 찾는다. 현재 스레드. spt_find_page() 함수는 주소를 기반으로 페이지 항목을 검색하고 발견되면 struct page에 대한 포인터를 반환합니다.
 }
 
+/*
+    validate_buffer() 함수는 Pintos 프로젝트에서 사용자 공간의 버퍼를 검증하여 액세스 가능성과 권한을 보장하는 데 사용됩니다.
+
+    validate_buffer() 함수는 액세스 가능성, 경계 및 권한을 확인하여 사용자 공간의 버퍼를 검증합니다.
+    버퍼 범위 내의 각 페이지를 확인하여 페이지가 유효하고 요청된 작업에 필요한 권한이 있는지 확인합니다.
+    유효성 검사에 실패하면 프로그램이 종료됩니다.
+*/
 void validate_buffer(void *buffer, size_t size, bool to_write)
 {
-    if (buffer == NULL)
+    if (buffer == NULL) // 주어진 버퍼가 NULL인지 확인합니다. 버퍼가 NULL이면 유효하지 않은 버퍼임을 나타내며 종료 상태가 -1인 sys_exit() 함수를 사용하여 프로그램이 종료됩니다.
         sys_exit(-1);
 
-    void *start_addr = pg_round_down(buffer);
-    void *end_addr = pg_round_down(buffer + size);
+    void *start_addr = pg_round_down(buffer); // 버퍼 주소를 가장 가까운 페이지 경계까지 내림하여 start_addr에 할당합니다. 이렇게 하면 페이지의 시작 주소로 작업할 수 있습니다.
+    void *end_addr = pg_round_down(buffer + size); // 버퍼 주소에 크기를 더하고 가장 가까운 페이지 경계까지 내림하여 버퍼의 끝 주소를 계산합니다. 이것은 버퍼를 포함하는 마지막 페이지의 끝 주소를 제공합니다.
 
-    ASSERT(start_addr <= end_addr);
-    for (void *addr = end_addr; addr >= start_addr; addr -= PGSIZE)
+    ASSERT(start_addr <= end_addr); // 시작 주소가 끝 주소보다 작거나 같다고 주장합니다. 이 검사는 버퍼 범위가 유효하고 적절하게 정의되었는지 확인합니다.
+    for (void *addr = end_addr; addr >= start_addr; addr -= PGSIZE) // addr -= PGSIZE는 버퍼 범위를 역순으로 반복하며, 끝 주소에서 시작하여 PGSIZE(페이지 크기)의 단계 크기로 시작 주소를 향해 이동합니다.
     {
-        struct page *pg = validate_usr_addr(addr);
-        if (pg == NULL)
+        struct page *pg = validate_usr_addr(addr); // validate_usr_addr() 함수를 호출하여 버퍼 범위 내의 각 페이지를 검증합니다. validate_usr_addr() 함수는 주소가 유효한 사용자 주소인지 확인하고 해당 struct page에 대한 포인터를 반환합니다.
+        if (pg == NULL)                            // validate_usr_addr()에 의해 반환된 페이지 항목이 NULL인지 확인합니다. NULL이면 페이지가 유효하지 않음을 의미하며 sys_exit()를 사용하여 프로그램이 종료됩니다.
         {
             sys_exit(-1);
         }
-        if (pg->writable == false && to_write == true)
+        if (pg->writable == false && to_write == true) // 페이지의 writable 플래그가 false인지 확인합니다(페이지가 읽기 전용임을 나타냄) 그리고 to_write 플래그는 true입니다(쓰기 작업이 요청되었음을 나타냄). 두 조건이 모두 참이면 읽기 전용 페이지에 쓰기를 시도하고 sys_exit()를 사용하여 프로그램이 종료됨을 의미합니다.
         {
             // printf("%s: pg->writable: %p\n", thread_current()->name, pg->writable);
             sys_exit(-1);

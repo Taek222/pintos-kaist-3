@@ -259,16 +259,21 @@ vm_stack_growth(void *addr)
 }
 
 /* Handle the fault on write_protected page */
+/*
+  vm_handle_wp() 함수는 Pintos 프로젝트의 주어진 페이지에 대한 쓰기 방지 오류를 처리합니다.
+  이 함수는 쓰기 금지로 표시된 페이지에서 쓰기 액세스를 시도할 때 호출됩니다.
+  오류를 처리하고 페이지를 다시 쓸 수 있도록 만드는 역할을 합니다.
+*/
 static bool
 vm_handle_wp(struct page *page)
 {
-  void *parent_kva = page->frame->kva;
-  page->frame->kva = palloc_get_page(PAL_USER);
+  void *parent_kva = page->frame->kva; // 페이지와 연결된 상위 프레임의 커널 가상 주소(kva)를 검색합니다. 페이지 데이터의 현재 위치입니다.
+  page->frame->kva = palloc_get_page(PAL_USER); // PAL_USER 플래그로 palloc_get_page()를 호출하여 페이지에 대한 새로운 커널 가상 주소(kva)를 할당합니다. 이렇게 하면 커널에서 새로운 물리적 페이지를 가져와서 페이지의 프레임에 할당합니다.
 
-  memcpy(page->frame->kva, parent_kva, PGSIZE);
-  pml4_set_page(thread_current()->pml4, page->va, page->frame->kva, page->copy_writable);
+  memcpy(page->frame->kva, parent_kva, PGSIZE); // 부모 프레임(parent_kva에 저장됨)의 내용을 새로 할당된 프레임(page->frame->kva)으로 복사합니다. memcpy() 함수는 페이지 데이터의 바이트 단위 복사를 수행하는 데 사용됩니다.
+  pml4_set_page(thread_current()->pml4, page->va, page->frame->kva, page->copy_writable); // 현재 스레드의 PML4(페이지 맵 레벨 4) 페이지 테이블에서. 새로운 물리적 주소(page->frame->kva)를 가상 주소에 대한 매핑으로 설정하고 page->copy_writable 값에 따라 액세스 권한을 업데이트합니다.
 
-  return true;
+  return true; // 쓰기 방지 오류가 성공적으로 처리되었고 페이지가 다시 쓰기 가능하게 되었음을 나타냅니다.
 }
 
 /* Return true on success */
@@ -291,14 +296,14 @@ bool vm_try_handle_fault(struct intr_frame *f, void *addr,
   /* TODO: Your code goes here */
   if (is_kernel_vaddr(addr) && user) // 오류 주소 addr이 커널 가상 주소(is_kernel_vaddr)인지, 사용자 모드(user)에서 오류가 발생했는지 확인합니다. 두 조건이 모두 참이면 오류를 처리할 수 없음을 나타내는 '거짓'을 반환합니다.
     return false;
-  // printf("TID: %d, addr: %p\n", thread_current()->tid, addr);
+  printf("TID: %d, addr: %p\n", thread_current()->tid, addr);
   page = spt_find_page(spt, addr); //  'spt_find_page' 함수를 호출하여 오류 주소 'addr'에 해당하는 추가 페이지 테이블('spt')에서 페이지 항목을 검색합니다. 결과는 page 포인터에 저장됩니다.
   if (write && !not_present && page->copy_writable && page) // 오류가 쓰기 액세스(write 플래그)로 인한 것인지, 페이지가 존재하지 않는 것으로 표시되지 않았는지(!not_present), 페이지가 기록 중 복사 쓰기 가능한지(page ->copy_writable). 이러한 조건이 충족되면 vm_handle_wp 함수를 호출하여 페이지 폴트를 처리하고 결과를 반환합니다.
   {
     // printf("not present is false\n");
     return vm_handle_wp(page);
   }
-
+  printf("user_rsp : %x\n", thread_current()->user_rsp);
   /*
      page가 NULL인 경우를 처리하며 이는 오류 주소에 대한 추가 페이지 테이블에 페이지 항목이 없음을 나타냅니다.
   */
